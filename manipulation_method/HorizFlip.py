@@ -1,12 +1,7 @@
 from PIL import Image
 
 
-def HorizFlip(
-    image: Image.Image,
-    level: int,
-    aux_image: Image.Image = None,
-    **kwargs
-) -> Image.Image:
+def HorizFlip(image: Image.Image, level: int, aux_image: Image.Image = None, **kwargs) -> Image.Image:
     """
     HorizFlip 변조
 
@@ -22,34 +17,13 @@ def HorizFlip(
     # 입력 확인
     # ========================================================
 
-    if level not in {
-        1,
-        2,
-        3,
-        4
-    }:
-
-        raise ValueError(
-            "level은 1~4 중 하나여야 합니다."
-        )
-
-
-    # ========================================================
-    # Target 이미지 준비
-    # ========================================================
-
-    target = image.convert(
-        "RGB"
-    )
-
-
+    if level not in {1, 2, 3, 4}:
+        raise ValueError("level은 1~4 중 하나여야 합니다.")
+    
     # ========================================================
     # Horizontal Flip 적용
     # ========================================================
 
-    result = target.transpose(
-        Image.FLIP_LEFT_RIGHT
-    )
+    flipped = image.transpose(Image.FLIP_LEFT_RIGHT)
 
-
-    return result
+    return flipped

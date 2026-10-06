@@ -71,9 +71,9 @@ def Shape(image: Image.Image, level: int, aux_image: Image.Image = None, **kwarg
     black_bg = Image.new(image.mode, (width, height), 0)
     cropped_shape = Image.composite(image, black_bg, mask)
 
-    resized = cropped_shape.resize(
+    shape = cropped_shape.resize(
         (width, height),
         Image.Resampling.LANCZOS
     )
 
-    return resized
+    return shape

@@ -1,83 +1,118 @@
 import math
 import random
+import zlib
+
+import cv2
+import numpy as np
 from PIL import Image
 
+"""
+Swirl 변조 (랜덤 소용돌이)
 
-def Swirl(image: Image.Image, level: int, aux_image: Image.Image = None, **kwargs) -> Image.Image:
-    """
-    Swirl 변조
+이미지의 랜덤한 위치를 중심으로 내용을 소용돌이 모양으로 감아 돌린다.
 
-    level 1~4에 따라 이미지에 random swirl effect를 생성한 뒤
-    원래 이미지 크기로 resize한다.
+각 픽셀을 소용돌이 중심 둘레로 회전시키되, 회전각을 중심에서 가장 크게 하고
+중심에서 멀어질수록 지수적으로 줄인다.
+그래서 중심 부근은 여러 바퀴 감기고, 바깥쪽은 완만하게 휘어진다.
+(scikit-image의 swirl 변환과 같은 방식이다.)
 
-    level 1: 미세한 소용돌이 (반지름 0.1, 강도 0.5)
-    level 2: 약한 소용돌이 (반지름 0.2, 강도 1.0)
-    level 3: 중간 소용돌이 (반지름 0.3, 강도 2.0)
-    level 4: 강한 소용돌이 (반지름 0.4, 강도 4.0)
-    """
+소용돌이의 중심 위치, 회전 방향, 영향 범위는 랜덤이고,
+중심에서의 회전각은 level별 범위 안에서 랜덤으로 정한다.
+이미지 밖을 참조하는 부분은 거울 반사로 채워 검은 여백이 생기지 않는다.
+출력 크기는 원본과 같다.
 
-    if level not in {1, 2, 3, 4}:
+level별 중심에서의 회전각 범위 (라디안 / 바퀴 수):
+level 1: 1.5~3   / 약 0.25~0.5바퀴
+level 2: 3~6     / 약 0.5~1바퀴
+level 3: 6~12    / 약 1~2바퀴
+level 4: 12~20   / 약 2~3바퀴
+
+같은 이미지와 같은 level에 대해서는 항상 같은 결과가 나온다.
+"""
+
+# level별 중심에서의 회전각 범위 (라디안)
+STRENGTH_RANGES = {
+    1: (1.5, 3.0),
+    2: (3.0, 6.0),
+    3: (6.0, 12.0),
+    4: (12.0, 20.0),
+}
+
+# 소용돌이의 영향 범위 (이미지 짧은 변 대비 반지름)
+# 이 반지름의 약 1/7 거리마다 회전각이 절반으로 줄어든다.
+RADIUS_RANGE = (2.0, 4.0)
+
+# 소용돌이 중심이 놓일 수 있는 범위 (이미지 가로/세로 대비)
+CENTER_RANGE = (0.2, 0.8)
+
+
+def Swirl(
+    image: Image.Image,
+    level: int,
+    aux_image: Image.Image = None,
+    rng: random.Random = None,
+    **kwargs
+) -> Image.Image:
+
+    if level not in STRENGTH_RANGES:
         raise ValueError("level은 1~4 중 하나여야 합니다.")
 
-    # level별 소용돌이 반지름 비율 및 강도 설정
-    configs = {
-        1: {"radius_ratio": 0.1, "strength": 0.5},
-        2: {"radius_ratio": 0.2, "strength": 1.0},
-        3: {"radius_ratio": 0.3, "strength": 2.0},
-        4: {"radius_ratio": 0.4, "strength": 4.0},
-    }
-
-    config = configs[level]
-    r_ratio = config["radius_ratio"]
-    strength = config["strength"]
-
     width, height = image.size
-    cx = width / 2.0
-    cy = height / 2.0
-    
-    # 소용돌이 영향 배경 반지름 (대각선 길이 기준)
-    swirl_radius = math.hypot(width, height) * r_ratio
 
-    # 왜곡 함수 정의
-    def distort(x, y):
-        dx = x - cx
-        dy = y - cy
+    # 너무 작은 이미지는 소용돌이를 만들 수 없으므로 그대로 돌려준다.
+    if width < 2 or height < 2:
+        return image.copy()
 
-        r = math.hypot(dx, dy)
-        theta = math.atan2(dy, dx)
+    # 팔레트(P), 흑백 1비트(1) 등은 픽셀값을 직접 섞을 수 없으므로 RGB로 바꾼다.
+    if image.mode not in {"L", "LA", "RGB", "RGBA"}:
+        image = image.convert("RGB")
 
-        if r < swirl_radius:
-            angle_offset = strength * (swirl_radius - r) / swirl_radius
-            distorted_theta = theta + angle_offset
-            target_x = cx + r * math.cos(distorted_theta)
-            target_y = cy + r * math.sin(distorted_theta)
-            return target_x, target_y
-        else:
-            return x, y
+    # rng를 넘겨받지 않으면 이미지 내용 + level로 시드를 만든다.
+    if rng is None:
+        seed = zlib.crc32(image.tobytes()) + level
+        rng = random.Random(seed)
 
-    x0, y0 = 0, 0
-    x1, y1 = width, height
+    # 소용돌이의 중심 위치를 랜덤으로 결정
+    center_x = rng.uniform(*CENTER_RANGE) * (width - 1)
+    center_y = rng.uniform(*CENTER_RANGE) * (height - 1)
 
-    dx0, dy0 = distort(x0, y0)
-    dx1, dy1 = distort(x1, y0)
-    dx2, dy2 = distort(x1, y1)
-    dx3, dy3 = distort(x0, y1)
+    # 중심에서의 회전각과 회전 방향을 랜덤으로 결정
+    strength = rng.uniform(*STRENGTH_RANGES[level])
 
-    meshdata = [(
-        (0, 0, width, height),
-        (dx0, dy0, dx3, dy3, dx2, dy2, dx1, dy1)
-    )]
+    if rng.random() < 0.5:
+        strength = -strength
 
-    distorted_img = image.transform(
-        (width, height),
-        Image.MESH,
-        meshdata,
-        Image.Resampling.BICUBIC
+    # 소용돌이의 영향 범위를 랜덤으로 결정
+    radius = rng.uniform(*RADIUS_RANGE) * min(width, height)
+
+    # 회전각이 1/e로 줄어드는 거리
+    decay = radius * math.log(2) / 5.0
+
+    grid_x, grid_y = np.meshgrid(
+        np.arange(width, dtype=np.float32) - center_x,
+        np.arange(height, dtype=np.float32) - center_y
     )
 
-    resized = distorted_img.resize(
-        (width, height),
-        Image.Resampling.LANCZOS
+    # 소용돌이 중심 기준 극좌표
+    rho = np.sqrt(grid_x * grid_x + grid_y * grid_y)
+    theta = np.arctan2(grid_y, grid_x)
+
+    # 중심에 가까울수록 더 많이 회전시킨다.
+    theta = theta + strength * np.exp(-rho / decay)
+
+    # 출력의 각 픽셀이 원본의 어느 위치를 참조할지 계산
+    map_x = (center_x + rho * np.cos(theta)).astype(np.float32)
+    map_y = (center_y + rho * np.sin(theta)).astype(np.float32)
+
+    # 이미지 밖을 참조하는 부분은 거울 반사로 채운다.
+    distorted = cv2.remap(
+        np.asarray(image),
+        map_x,
+        map_y,
+        interpolation=cv2.INTER_CUBIC,
+        borderMode=cv2.BORDER_REFLECT_101
     )
 
-    return resized
+    Swirl = Image.fromarray(distorted)
+
+    return Swirl

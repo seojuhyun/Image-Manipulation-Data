@@ -1,7 +1,7 @@
 from PIL import Image
 
 
-def VertFLIP(image: Image.Image, level: int, aux_image: Image.Image = None, **kwargs) -> Image.Image:
+def VertFlip(image: Image.Image, level: int, aux_image: Image.Image = None, **kwargs) -> Image.Image:
     """
     VertFLIP 변조
 
@@ -13,8 +13,16 @@ def VertFLIP(image: Image.Image, level: int, aux_image: Image.Image = None, **kw
     level 4: 상하 반전 적용
     """
 
+    # ========================================================
+    # 입력 확인
+    # ========================================================
+
     if level not in {1, 2, 3, 4}:
         raise ValueError("level은 1~4 중 하나여야 합니다.")
+
+    # ========================================================
+    # Vertical Flip 적용
+    # ========================================================
 
     flipped = image.transpose(Image.FLIP_TOP_BOTTOM)
 

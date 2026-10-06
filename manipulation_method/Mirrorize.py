@@ -44,9 +44,9 @@ def Mirrorize(image: Image.Image, level: int, aux_image: Image.Image = None, **k
         flipped = bottom_half.transpose(Image.FLIP_TOP_BOTTOM)
         mirrored.paste(flipped, (0, 0))
 
-    resized = mirrored.resize(
+    mirrorize = mirrored.resize(
         (width, height),
         Image.Resampling.LANCZOS
     )
 
-    return resized
+    return mirrorize

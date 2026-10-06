@@ -1,71 +1,85 @@
 import random
-import numpy as np
+import zlib
+
 from PIL import Image
+
+"""
+Gamma 변조 (랜덤 감마 변환)
+
+각 픽셀 값을 0~1 범위로 바꾼 뒤 gamma 제곱을 해서 밝기를 바꾼다.
+    출력 = 입력 ^ gamma
+
+gamma가 1보다 크면 중간 밝기가 어두워지고, 클수록 더 어두워진다.
+완전한 검은색(0)과 흰색(1)은 변하지 않고 그 사이의 값만 바뀌므로,
+어두운 부분은 검게 뭉개지고 대비가 강해진다.
+R, G, B 채널에 각각 적용하기 때문에 색도 더 짙어진다.
+
+gamma 값은 level별 범위 안에서 랜덤으로 정한다.
+투명도(알파) 채널은 건드리지 않으며, 출력 크기는 원본과 같다.
+
+level별 gamma 범위:
+level 1: 1.2~1.5
+level 2: 1.5~2.0
+level 3: 2.0~3.0
+level 4: 3.0~4.0
+
+같은 이미지와 같은 level에 대해서는 항상 같은 결과가 나온다.
+"""
+
+# level별 gamma 범위
+GAMMA_RANGES = {
+    1: (1.2, 1.5),
+    2: (1.5, 2.0),
+    3: (2.0, 3.0),
+    4: (3.0, 4.0),
+}
+
+# True면 절반의 확률로 gamma의 역수(1 / gamma)를 써서
+# 어둡게 하는 대신 밝게 만든다.
+ALLOW_BRIGHTEN = False
 
 
 def Gamma(
     image: Image.Image,
     level: int,
     aux_image: Image.Image = None,
+    rng: random.Random = None,
     **kwargs
 ) -> Image.Image:
-    """
-    Gamma 변조
 
-    Power-law function을 적용하여 이미지 luminance를 변경한 뒤
-    원래 이미지 크기로 resize한다.
-
-    level 1: 미세한 감마 변화 (gamma = 0.85 ~ 1.15)
-    level 2: 약한 감마 변화 (gamma = 0.70 ~ 1.30)
-    level 3: 중간 감마 변화 (gamma = 0.50 ~ 1.60)
-    level 4: 강한 감마 변화 (gamma = 0.30 ~ 2.00)
-    """
-
-    # ========================================================
-    # 입력 확인
-    # ========================================================
-
-    if level not in {1, 2, 3, 4}:
+    if level not in GAMMA_RANGES:
         raise ValueError("level은 1~4 중 하나여야 합니다.")
 
-    # ========================================================
-    # Level별 Gamma 범위 설정
-    # ========================================================
+    # rng를 넘겨받지 않으면 이미지 내용 + level로 시드를 만든다.
+    if rng is None:
+        seed = zlib.crc32(image.tobytes()) + level
+        rng = random.Random(seed)
 
-    gamma_ranges = {
-        1: (0.85, 1.15),
-        2: (0.70, 1.30),
-        3: (0.50, 1.60),
-        4: (0.30, 2.00),
-    }
+    # level별 범위 안에서 gamma 값을 랜덤으로 결정
+    gamma = rng.uniform(*GAMMA_RANGES[level])
 
-    g_min, g_max = gamma_ranges[level]
-    gamma_val = random.uniform(g_min, g_max)
-    width, height = image.size
+    if ALLOW_BRIGHTEN and rng.random() < 0.5:
+        gamma = 1.0 / gamma
 
-    # Target 이미지 numpy 배열 변환 (0~1 float32 범위 정규화)
-    target = image.convert("RGB")
-    img_array = np.array(target, dtype=np.float32) / 255.0
+    # 투명도(알파) 채널이 있으면 따로 보관해 둔다.
+    has_alpha = "A" in image.getbands()
+    alpha = image.getchannel("A") if has_alpha else None
 
-    # ========================================================
-    # Power-law Transformation (Gamma Correction) 적용
-    # ========================================================
+    # 흑백(L)은 그대로, 그 외에는 RGB로 바꿔서 처리한다.
+    base = image if image.mode == "L" else image.convert("RGB")
 
-    # Power-law 연산: I_out = I_in ^ gamma
-    gamma_corrected = np.power(img_array, gamma_val)
+    # 0~255의 각 값이 변환 후 어떤 값이 되는지 미리 계산해 둔 표
+    # (출력 = 255 x (입력 / 255) ^ gamma)
+    table = [
+        round(255.0 * (value / 255.0) ** gamma)
+        for value in range(256)
+    ]
 
-    # 값 범위 클리핑 (0~255) 및 uint8 변환
-    gamma_corrected = np.clip(gamma_corrected * 255.0, 0, 255).astype(np.uint8)
+    # 표를 모든 채널에 적용한다.
+    Gamma = base.point(table * len(base.getbands()))
 
-    # ========================================================
-    # PIL Image 변환 및 Resize
-    # ========================================================
+    # 보관해 둔 투명도 채널을 다시 붙인다.
+    if has_alpha:
+        Gamma.putalpha(alpha)
 
-    gamma_image = Image.fromarray(gamma_corrected)
-
-    resized = gamma_image.resize(
-        (width, height),
-        Image.Resampling.LANCZOS
-    )
-
-    return resized
+    return Gamma

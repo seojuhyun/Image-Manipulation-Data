@@ -1,79 +1,101 @@
+import random
+import zlib
+
+import cv2
+import numpy as np
 from PIL import Image
 
+"""
+GridDistort 변조 (랜덤 격자 왜곡)
 
-def GridDistort(image: Image.Image, level: int, aux_image: Image.Image = None, **kwargs) -> Image.Image:
-    """
-    GridDistort 변조
+이미지를 N x N 격자로 나눈 뒤, 격자선의 위치를 랜덤하게 옮겨
+칸마다 서로 다른 비율로 늘어나거나 줄어들게 만든다.
 
-    level 1~4에 따라 grid 격자 수와 비선형 왜곡(nonlinear distortion) 강도를 
-    다르게 적용한 뒤 원래 이미지 크기로 resize한다.
+가로 방향과 세로 방향을 각각 독립적으로 처리한다.
+세로 격자선은 좌우로, 가로 격자선은 상하로 랜덤하게 이동하며,
+격자선 사이의 내용은 그에 맞춰 늘어나거나 압축된다.
+그래서 어떤 칸은 넓어지고 이웃 칸은 좁아지는 식의
+불균일한 왜곡이 생긴다.
 
-    level 1: 2x2 격자, 미세한 비선형 왜곡 (변위 비율 0.03)
-    level 2: 3x3 격자, 약한 비선형 왜곡 (변위 비율 0.06)
-    level 3: 4x4 격자, 중간 비선형 왜곡 (변위 비율 0.10)
-    level 4: 5x5 격자, 강한 비선형 왜곡 (변위 비율 0.15)
-    """
+이미지의 바깥 테두리는 고정이라 내용이 잘리거나 여백이 생기지 않는다.
+출력 크기는 원본과 같다.
 
-    if level not in {1, 2, 3, 4}:
+level별 격자 수 / 격자선 최대 이동량 (이미지 가로·세로 대비):
+level 1: 2x2 / 3%
+level 2: 3x3 / 6%
+level 3: 4x4 / 10%
+level 4: 5x5 / 9%
+
+같은 이미지와 같은 level에 대해서는 항상 같은 결과가 나온다.
+"""
+
+# level별 격자 분할 수(N x N) 및 격자선 최대 이동 비율
+CONFIGS = {
+    1: {"grid_steps": 2, "distort_limit": 0.03},
+    2: {"grid_steps": 3, "distort_limit": 0.06},
+    3: {"grid_steps": 4, "distort_limit": 0.10},
+    4: {"grid_steps": 5, "distort_limit": 0.09},
+}
+
+
+def axis_map(length, steps, limit, rng):
+    # 한 축에 대해, 출력의 각 픽셀이 원본의 어느 위치를 참조할지 구한다.
+
+    # 이웃한 격자선끼리 교차하지 않도록 이동량을 칸 크기의 45%로 제한
+    max_shift = min(limit, 0.45 / steps) * length
+
+    # 출력에서는 격자선이 균등하게 놓이고,
+    # 원본에서는 안쪽 격자선이 랜덤하게 이동한 위치에 놓인다.
+    dst_edges = np.linspace(0, length, steps + 1)
+    src_edges = dst_edges.copy()
+
+    for idx in range(1, steps):
+        src_edges[idx] += rng.uniform(-max_shift, max_shift)
+
+    # 격자선 사이는 선형 보간 (픽셀 중심 기준)
+    coords = np.arange(length, dtype=np.float64) + 0.5
+
+    return (
+        np.interp(coords, dst_edges, src_edges) - 0.5
+    ).astype(np.float32)
+
+
+def GridDistort(
+    image: Image.Image,
+    level: int,
+    aux_image: Image.Image = None,
+    rng: random.Random = None,
+    **kwargs
+) -> Image.Image:
+
+    if level not in CONFIGS:
         raise ValueError("level은 1~4 중 하나여야 합니다.")
 
-    # level별 격자 분할 수(N x N) 및 왜곡 변위 비율
-    configs = {
-        1: {"grid_steps": 2, "distort_limit": 0.03},
-        2: {"grid_steps": 3, "distort_limit": 0.06},
-        3: {"grid_steps": 4, "distort_limit": 0.10},
-        4: {"grid_steps": 5, "distort_limit": 0.15},
-    }
-
-    config = configs[level]
+    config = CONFIGS[level]
     steps = config["grid_steps"]
     limit = config["distort_limit"]
 
     width, height = image.size
-    dx = width / steps
-    dy = height / steps
 
-    # 격자 교차점 이동 좌표 계산
-    def get_distorted_point(i, j):
-        x = i * dx
-        y = j * dy
-        
-        # 테두리 점은 고정하고 내부 교차점만 비선형 축소/확장 왜곡
-        if 0 < i < steps and 0 < j < steps:
-            offset_x = (1 if (i + j) % 2 == 0 else -1) * width * limit
-            offset_y = (1 if (i + j) % 2 == 1 else -1) * height * limit
-            return x + offset_x, y + offset_y
-        return x, y
+    # rng를 넘겨받지 않으면 이미지 내용 + level로 시드를 만든다.
+    if rng is None:
+        seed = zlib.crc32(image.tobytes()) + level
+        rng = random.Random(seed)
 
-    # PIL Image.MESH 형태에 맞춘 메쉬 데이터 생성
-    meshdata = []
-    for i in range(steps):
-        for j in range(steps):
-            box = (
-                int(i * dx), 
-                int(j * dy), 
-                int((i + 1) * dx), 
-                int((j + 1) * dy)
-            )
-
-            x0, y0 = get_distorted_point(i, j)
-            x1, y1 = get_distorted_point(i + 1, j)
-            x2, y2 = get_distorted_point(i + 1, j + 1)
-            x3, y3 = get_distorted_point(i, j + 1)
-
-            quad = (x0, y0, x3, y3, x2, y2, x1, y1)
-            meshdata.append((box, quad))
-
-    distorted = image.transform(
-        (width, height),
-        Image.MESH,
-        meshdata,
-        Image.Resampling.BICUBIC
+    # 가로/세로 방향의 참조 위치를 각각 랜덤으로 생성
+    map_x, map_y = np.meshgrid(
+        axis_map(width, steps, limit, rng),
+        axis_map(height, steps, limit, rng)
     )
 
-    resized = distorted.resize(
-        (width, height),
-        Image.Resampling.LANCZOS
+    distorted = cv2.remap(
+        np.asarray(image),
+        map_x,
+        map_y,
+        interpolation=cv2.INTER_CUBIC,
+        borderMode=cv2.BORDER_REFLECT_101
     )
 
-    return resized
+    GridDistort = Image.fromarray(distorted)
+
+    return GridDistort
