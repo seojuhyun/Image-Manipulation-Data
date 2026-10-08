@@ -1,5 +1,5 @@
 # level에 따라 background mask 기준을 바꾸지 않고, 동일한 background 영역을 대상으로 새 배경이 섞이는 비율만 25% → 100%
-
+# 이미지의 background를 무작위로 변경. "requires_aux": True
 import numpy as np
 
 from PIL import Image, ImageOps

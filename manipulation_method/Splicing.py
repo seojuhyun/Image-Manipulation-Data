@@ -1,4 +1,5 @@
 # level에 따라 전체 이미지 대비 총 변조 면적 비율을 5%, 10%, 20%, 30%로 설정
+# "requires_aux": True,
 
 import math
 import random
